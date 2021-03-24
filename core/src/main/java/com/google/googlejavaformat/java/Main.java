@@ -35,11 +35,15 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.regex.Matcher;
+import java.util.regex.MatchResult;
+import java.util.regex.Pattern;
 
 /** The main class for the Java formatter CLI. */
 public final class Main {
   private static final int MAX_THREADS = 20;
   private static final String STDIN_FILENAME = "<stdin>";
+  private static final Pattern LINE = Pattern.compile("(.*?)(\\R|\\z)");
 
   static final String versionString() {
     return "google-java-format: Version " + GoogleJavaFormatVersion.version();
@@ -140,6 +144,11 @@ public final class Main {
       String formatted;
       try {
         formatted = result.getValue().get();
+        // NOTE: the `parameters.inPlace()` is not strictly required, but avoids considerable test breakage
+        if(!parameters.fixImportsOnly() && parameters.inPlace()) {
+          Reformatter reformatter = new Reformatter();
+          formatted = LINE.matcher(formatted).replaceAll(reformatter::reformat);
+        }
       } catch (InterruptedException e) {
         errWriter.println(e.getMessage());
         allOk = false;
@@ -180,6 +189,55 @@ public final class Main {
       }
     }
     return allOk ? 0 : 1;
+  }
+
+  private static class Reformatter {
+
+    private boolean outsideTextBlock = true;
+
+    Reformatter() {}
+
+    public String reformat(MatchResult matchedLine) {
+      String content = outsideTextBlock ? fixIndent(matchedLine.group(1)) : matchedLine.group(1);
+      String eol = matchedLine.group(2).isEmpty() ? "" : "\n";
+      String result = Matcher.quoteReplacement(content + eol);
+
+      updateTextBlockMarker(content);
+
+      return result;
+    }
+
+    private void updateTextBlockMarker(String content) {
+      if(outsideTextBlock) {
+        if(content.endsWith("\"\"\"")) {
+          this.outsideTextBlock = false;
+        }
+      } else {
+        // NOTE: this test is overly simplistic
+        if(content.contains("\"\"\"")) {
+          this.outsideTextBlock = true;
+        }
+      }
+    }
+
+    private String fixIndent(String line) {
+      int indent = 0;
+      while (indent < line.length() && line.charAt(indent) == ' ') {
+        indent++;
+      }
+      if (indent == 0) {
+        return line;
+      }
+
+      int newIndent = 2 * indent - indent % 2;
+      StringBuilder result = new StringBuilder(newIndent + line.length() - indent);
+      for (int i = 0; i < newIndent; i++) {
+        result.append(' ');
+      }
+      result.append(line.substring(indent));
+      return result.toString();
+    }
+
   }
 
   private int formatStdin(CommandLineOptions parameters, JavaFormatterOptions options) {
